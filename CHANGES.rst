@@ -1,3 +1,8 @@
+v44.1.1.1
+-------
+
+* #3659: Limit the amount of whitespace to search/backtrack (CVE-2022-40897)
+
 v44.1.1
 -------
 
