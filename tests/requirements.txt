@@ -1,5 +1,5 @@
 mock
-pytest-flake8
+pytest-flake8<=1.0.7
 virtualenv>=13.0.0
 pytest-virtualenv>=1.2.7
 pytest>=3.7
