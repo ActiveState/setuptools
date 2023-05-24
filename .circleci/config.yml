@@ -1,0 +1,487 @@
+version: 2.1
+
+cicd_image: &cicd_image docker-registry.activestate.build/ti/cicd@sha256:70ad1628265d758ac8dc1640e249996a1efa7371bc61ad16ee63cd2ca78017e5 # ./ti/deployments/packer/cicd
+
+go_default_envs: &go_default_envs
+  environment:
+    DEPLOY_IMAGE: *cicd_image
+    GOPROXY: "https://goproxy.activestate.build,https://proxy.golang.org,https://goproxy.io,direct"
+    ACTIVESTATE_CLI_DISABLE_UPDATES: "true"
+    DB_TOOLS_RANDOM_SEED: "1"
+    BAZEL_CONFIG: "--config=cci --config=cci-remote-cache"
+
+###############################################################################
+# executors
+###############################################################################
+
+executors:
+  deploy:
+    docker:
+      - image: cimg/base:2022.03
+        <<: *go_default_envs
+  golang-with-db:
+    docker:
+      - image: *cicd_image
+        auth:
+          username: $REGISTRY_INTERNAL_DOCKER_USER
+          password: $REGISTRY_INTERNAL_DOCKER_PASSWORD
+        <<: *go_default_envs
+      - image: cimg/postgres:14.4
+        command: "-c fsync=off"
+        environment:
+          POSTGRES_USER: postgres
+          PGPORT: "5432"
+          POSTGRES_HOST_AUTH_METHOD: trust
+
+###############################################################################
+# python save and restore cache
+###############################################################################
+python_cache_key: &python_cache_key
+  python37-local-lib-{{ checksum "~/TheHomeRepot/lib/python/tox.ini" }}-v1
+
+restore_python_cache: &restore_python_cache
+  restore_cache:
+    name: Restore python cache
+    keys:
+      - *python_cache_key
+
+save_python_cache: &save_python_cache
+  save_cache:
+    name: Save python cache
+    key: *python_cache_key
+    paths:
+      - ~/.local/lib/python3.10/site-packages
+      - ~/TheHomeRepot/lib/python/.tox
+      - ~/TheHomeRepot/lib/python/.mypy_cache
+
+###############################################################################
+# yarn save and restore cache
+###############################################################################
+yarn_cache_key: &yarn_cache_key
+  yarn-cache-{{ checksum "service/dashboard/yarn.lock" }}-v4
+
+restore_yarn_cache: &restore_yarn_cache
+  restore_cache:
+    name: Restore yarn cache
+    keys:
+      - *yarn_cache_key
+
+run_yarn_install: &run_yarn_install
+  run:
+    name: Set up build environment
+    command: |
+      cd service/dashboard
+      yarn install --pure-lockfile
+
+save_yarn_cache: &save_yarn_cache
+  save_cache:
+    name: Save yarn cache
+    key: *yarn_cache_key
+    paths:
+      - ./service/dashboard/node_modules
+
+###############################################################################
+# setup
+###############################################################################
+setup_bazel_remote: &setup_bazel_remote
+  run:
+    name: Set up Bazel remote cache config
+    command: |
+      echo "common:cci-remote-cache --remote_header=authorization=\"Bearer $BAZEL_JWT\"" >> user.bazelrc
+      echo "common:cci-remote-exec --remote_header=authorization=\"Bearer $BAZEL_JWT\"" >> user.bazelrc
+
+state_tool_login: &state_tool_login
+  run:
+    name: Authenticate State Tool
+    command: |
+      # state update -v -n
+      state auth --token $ACTIVESTATE_API_KEY # See activestate-ci entry in 1Password
+      state --version -n
+
+on_fail_slack_notify: &on_fail_slack_notify
+  run:
+    name: Notify On Master Branch Fail
+    when: on_fail
+    command: |
+      ti/scripts/ci/circleci-fail-slack-notifier.sh
+
+do_exclusively: &do_exclusively
+  run:
+    name: Wait for any previous builds to finish
+    command: |
+      api_url="https://circleci.com/api/v1/project/$CIRCLE_PROJECT_USERNAME/$CIRCLE_PROJECT_REPONAME?circle-token=$CIRCLE_TOKEN&limit=100"
+      rest=()
+      export branch=$CIRCLE_BRANCH
+
+      # reads $branch
+      should_skip() {
+        if [[ "$branch" && "$CIRCLE_BRANCH" != "$branch" ]]; then
+          echo "Not on branch $branch. Skipping..."
+            return 0
+        fi
+        return 1
+      }
+
+      # reads $branch
+      # sets $jq_prog
+      make_jq_prog() {
+        local jq_filters=""
+        if [[ $branch ]]; then
+          jq_filters+=" and .branch == \"$branch\""
+        fi
+        jq_prog=".[] | select(.build_num < $CIRCLE_BUILD_NUM and (.status | test(\"running|pending|queued\")) $jq_filters) | .build_num"
+      }
+
+      if should_skip; then exit 0; fi
+      make_jq_prog
+      while true; do
+        builds=$(curl -s -H "Accept: application/json" "$api_url" | jq "$jq_prog")
+        if [[ $builds ]]; then
+          echo "Waiting on builds:"
+          echo "$builds"
+        else
+          break
+        fi
+        echo "Retrying in 5 seconds..."
+        sleep 5
+      done
+
+      echo "Acquired lock"
+
+      if [[ "${#rest[@]}" -ne 0 ]]; then
+        "${rest[@]}"
+      fi
+
+
+###############################################################################
+# jobs
+###############################################################################
+jobs:
+  "Run Bazel Tests":
+    executor: golang-with-db
+    resource_class: large
+    working_directory: ~/TheHomeRepot
+    environment:
+      # The PG* vars are for the psql client.
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+       # The Postgres server in the image we're using doesn't support SSL.
+      PB_TEST_PG_SSL_MODE: disable
+      PB_PG_SSL_MODE: disable
+    steps:
+      - run:
+          name: Git Checkout
+          command: |
+            ./ti/scripts/ci/gitcheckout.sh
+      - *setup_bazel_remote
+      - run:
+          name: Bazel Info
+          command: |
+            bazel shutdown 2>/dev/null || true
+            bazel info $BAZEL_CONFIG
+      - run:
+          name: Bazel Gazelle and Buildifier
+          command: |
+            # Run gazelle in order to check for any go build file changes not
+            # committed
+            bazel run $BAZEL_CONFIG //:gazelle
+            # Run buildifier to check for any other build files not formatted
+            bazel run $BAZEL_CONFIG //:buildifier
+            git diff --exit-code
+      - run:
+          name: Bazel Build and Test Changed Targets
+          command: |
+            bazel run $BAZEL_CONFIG //:test-changes
+      - run:
+          name: Bazel Build Dashboard
+          command: |
+            # Build Dashboard
+            bazel build $BAZEL_CONFIG //service/dashboard:local
+      - *on_fail_slack_notify
+
+  "Validate and run some tests":
+    executor: golang-with-db
+    working_directory: ~/TheHomeRepot
+    environment:
+      # The PG* vars are for the psql client.
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+    steps:
+      - run:
+          name: Git Checkout
+          command: |
+            ./ti/scripts/ci/gitcheckout.sh
+      - *state_tool_login
+      - *restore_python_cache
+      - *restore_yarn_cache
+      - *run_yarn_install
+      - *setup_bazel_remote
+      - run:
+          name: Regenerate SQLBoiler models
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *"service/inventory-api-v1/db"* ]]; then
+              ./extras/platform-builder/db-tool.pl create-users
+              ./extras/platform-builder/run-sqlboiler.pl --schema inventory-api-v1 --skip-gazelle
+            fi
+      - run:
+          name: Dashboard Test
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *"service/dashboard"* ]]; then
+              cd service/dashboard
+              yarn test --fuzz 10
+              yarn test-js
+            fi
+      - run:
+          name: Elm Format
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *".elm"* ]]; then
+              elm_dirs=$(printf '%s\n' $changed_files | grep "\.elm" | grep -v service/dashboard/node_modules/ | xargs dirname | sort | uniq)
+              ./service/dashboard/node_modules/elm-format/bin/elm-format --yes --validate --elm-version=0.19 $elm_dirs
+            fi
+      - run:
+          name: Elm Review
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *".elm"* ]]; then
+              cd service/dashboard
+              yarn review
+            fi
+      - run:
+          name: SCSS Linting
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *".scss"* ]]; then
+              cd service/dashboard
+              yarn lint-css
+            fi
+      - run:
+          name: JS Linting
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *".js"* ]]; then
+              cd service/dashboard
+              yarn lint-js
+            fi
+      - run:
+          name: package.json Linting
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *"dashboard/package.json"* ]]; then
+              cd service/dashboard
+              yarn lint-json
+            fi
+      - run:
+          name: Color table linting
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *".csv"* ]]; then
+              cd service/dashboard
+              yarn validate-colors
+            fi
+      - run:
+          name: Python Tests and Linting
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *"lib/python"* ]]; then
+              state exec python3 -- -m tox -c lib/python -e lint-check
+              state exec python3 -- -m tox -c lib/python -e unit
+            fi
+            if [[ "$changed_files" == *"service/auto_whitelister"* ]]; then
+              state exec python3 -- -m tox -e lint-check -c service/auto_whitelister/tox.ini
+            fi
+            if [[ "$changed_files" == *"service/cve_reporter"* ]]; then
+              state exec python3 -- -m tox -e lint-check -c service/cve_reporter/tox.ini
+            fi
+            if [[ "$changed_files" == *"service/inventory_sync"* ]]; then
+              state exec python3 -- -m tox -e lint-check -c service/inventory_sync/tox.ini
+            fi
+            if [[ "$changed_files" == *"service/reqsvc"* ]]; then
+              state exec python3 -- -m tox -e lint-check -c service/reqsvc/tox.ini
+            fi
+            if [[ "$changed_files" == *"service/source_code_downloader"* ]]; then
+              state exec python3 -- -m tox -e lint-check -c service/source_code_downloader/tox.ini
+            fi
+            if [[ "$changed_files" == *"pipeline/"* ]]; then
+              state exec python3 -- -m tox -e lint-check -c pipeline/tox.ini
+            fi
+            if [[ "$changed_files" == *"cmd/"* ]]; then
+              state exec python3 -- -m tox -e lint-check -c cmd/tox.ini
+            fi
+            if [[ "$changed_files" == *"cmd/language-scanner"* ]]; then
+              bazel build $BAZEL_CONFIG //cmd/parseversion
+              export PATH="$PATH:bazel-bin/cmd/parseversion/parseversion_/"
+              export PYTHONPATH=lib/python/:service/source_code_downloader/:cmd/language-scanner/:cmd/parseversion/
+              state exec python3 -- -m pytest cmd/language-scanner/
+            fi
+            if [[ "$changed_files" == *"service/buildplanner"* ]]; then
+                cd service/buildplanner
+                state run testme
+                cd ../..
+            fi
+      - run:
+          name: Go Generate All For Checked In Validation
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *".go"* ]]; then
+              go_files=$(printf '%s\n' $changed_files | grep ".go")
+              for go_file in $go_files; do
+                cat $go_file | grep "go:generate" && exit_code=0 || exit_code=$?
+                if [[ "$exit_code" == 0 ]]; then
+                  go generate -x ./$(dirname $go_file)/
+                fi
+              done
+            fi
+      - run:
+          name: Regenerate Python Client Library For Inventory API, Head Chef, and API API
+          command: |
+            ./extras/scripts/regen-python-clients.sh `pwd`/third_party/bin/swagger-codegen-cli.jar
+      - run:
+          name: Check JSON Schemas
+          command: |
+            check-json-schemas -dir json-schemas/
+      - run:
+          name: JSON Ordered Tidy
+          command: |
+            json-ordered-tidy -check -config .json-ordered-tidy/json-ordered-tidy-config-tidy-config.json .json-ordered-tidy/
+            json-ordered-tidy -check -config .json-ordered-tidy/swagger-tidy-config.json service/head-chef/swagger.json service/inventory-api-v1/swagger.json
+            json-ordered-tidy -check -config .json-ordered-tidy/json-ordered-tidy-config-tidy-config.json service/head-chef/test/buildorchestration/recipes/
+            json-ordered-tidy -check -config .json-ordered-tidy/json-schema-tidy-config.json json-schemas/
+      - run:
+          name: Dashboard Code Gen
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *"service/buildplanner/"* ]] || [[ "$changed_files" == *"service/hasura/"* ]] || [[ "$changed_files" == *"service/hasura-da/"* ]] || [[ "$changed_files" == *"service/mediator/"* ]]; then
+              set -e
+              pushd "service/dashboard"
+              echo "Generating hasura dashboard code..."
+              yarn graphql
+              echo "Generating hasura DA dashboard code..."
+              yarn cve-graphql
+              echo "Generating Mediator dashboard code..."
+              yarn mediator
+              echo "Generating BuildPlanner dashboard code..."
+              yarn build-planner
+              popd
+            fi
+      - run:
+          name: Buildplanner Format
+          command: |
+            changed_files=$(build_tools_tannen -list)
+            if [[ "$changed_files" == *"service/buildplanner/"* ]]; then
+              pushd service/buildplanner
+              state run tidyit
+              popd
+            fi
+      - run:
+          name: Check that all generated/vendored things are up to date
+          command: |
+            git diff --exit-code
+      - *save_python_cache
+      - *save_yarn_cache
+      - *on_fail_slack_notify
+
+  ###########################################################################
+  # Schedule prdeploy in the mesos cluster
+  # TODO: remove this step when github hooks fully enabled in deploy-api.
+  ###########################################################################
+  "Maybe Deploy Pull-Request":
+    executor: deploy
+    steps:
+      - *do_exclusively
+      - run:
+          name: Schedule pr deploy mesos
+          command: |
+            PR_NUMBER=$(echo $CIRCLE_PULL_REQUEST | cut -f 7 -d '/')
+            counter=0
+            until curl --fail -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/ActiveState/TheHomeRepot/pulls/$PR_NUMBER" > /tmp/pr.json
+            do
+              sleep 2
+              echo "could not get response from api.github.com"
+              counter=$((counter + 1))
+              if [[ $counter -gt 5 ]]; then
+                exit 1
+              fi
+            done
+
+            SHOULD_DEPLOY=$(cat /tmp/pr.json | jq -c '.labels[] | select(.name | contains("deploy:newdb"))')
+            if [[ "$SHOULD_DEPLOY" == "" ]]; then
+              echo "not labeled for deployment and in an open state"
+              exit 0
+            fi
+
+            if ! jq -n --arg branch "$CIRCLE_BRANCH" --arg pr_number "$PR_NUMBER" --arg deploy_image "$DEPLOY_IMAGE" --arg gh_user "$CIRCLE_USERNAME" '{ ref: $branch, environment: $pr_number, task: "deploy", transient_environment: true, auto_merge: false, payload: { deploy_image: $deploy_image, github_pr_number: $pr_number, username: $gh_user } , description: "Deploy request from CircleCI", required_contexts: [] }' > /tmp/gh_deployment.json
+            then
+              echo "ERROR: failed to write to github deployment json" >& 2
+              exit 1
+            fi
+
+            until curl --fail -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" https://api.github.com/repos/ActiveState/TheHomeRepot/deployments -d @/tmp/gh_deployment.json
+            do
+              sleep 2
+              echo "could not get response from api.github.com"
+              counter=$((counter + 1))
+              if [[ $counter -gt 5 ]]; then
+                exit 1
+              fi
+            done
+      # FIXME there is no git checkout here
+      #- *on_fail_slack_notify
+
+  ###########################################################################
+  # Schedule deploy in the mesos cluster
+  ###########################################################################
+  "Deploy Master":
+    executor: deploy
+    steps:
+      - *do_exclusively
+      - run:
+          name: Schedule staging/production deploy
+          command: |
+            PR_NUMBER=0
+            if ! jq -n --arg branch "$CIRCLE_BRANCH" --arg pr_number "$PR_NUMBER" --arg deploy_image "$DEPLOY_IMAGE" --arg gh_user "$CIRCLE_USERNAME" '{ ref: $branch, environment: $pr_number, task: "deploy", transient_environment: true, auto_merge: false, payload: { deploy_image: $deploy_image, github_pr_number: $pr_number, username: $gh_user } , description: "Deploy request from CircleCI", required_contexts: [] }' > /tmp/gh_deployment.json
+            then
+              echo "ERROR: failed to write to github deployment json" >& 2
+              exit 1
+            fi
+
+            until curl --fail -X POST -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28" https://api.github.com/repos/ActiveState/TheHomeRepot/deployments -d @/tmp/gh_deployment.json
+            do
+              sleep 2
+              echo "could not get response from api.github.com"
+              counter=$((counter + 1))
+              if [[ $counter -gt 5 ]]; then
+                exit 1
+              fi
+            done
+
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - "Run Bazel Tests":
+          filters:
+            tags:
+              only: /.*/
+      - "Validate and run some tests":
+          filters:
+            tags:
+              only: /.*/
+      - "Maybe Deploy Pull-Request":
+          requires:
+            - "Run Bazel Tests"
+            - "Validate and run some tests"
+          filters:
+            branches:
+              ignore: "master"
+      - "Deploy Master":
+          requires:
+            - "Run Bazel Tests"
+            - "Validate and run some tests"
+          filters:
+            branches:
+              only: "master"
