@@ -502,10 +502,14 @@ class TestOptions:
             tmpdir,
             '[options]\n'
             'zip_safe = True\n'
+            'use_2to3 = 1\n'
             'include_package_data = yes\n'
             'package_dir = b=c, =src\n'
             'packages = pack_a, pack_b.subpack\n'
             'namespace_packages = pack1, pack2\n'
+            'use_2to3_fixers = your.fixers, or.here\n'
+            'use_2to3_exclude_fixers = one.here, two.there\n'
+            'convert_2to3_doctests = src/tests/one.txt, src/two.txt\n'
             'scripts = bin/one.py, bin/two.py\n'
             'eager_resources = bin/one.py, bin/two.py\n'
             'install_requires = docutils>=0.3; pack ==1.1, ==1.3; hey\n'
@@ -518,10 +522,15 @@ class TestOptions:
         )
         with get_dist(tmpdir) as dist:
             assert dist.zip_safe
+            assert dist.use_2to3
             assert dist.include_package_data
             assert dist.package_dir == {'': 'src', 'b': 'c'}
             assert dist.packages == ['pack_a', 'pack_b.subpack']
             assert dist.namespace_packages == ['pack1', 'pack2']
+            assert dist.use_2to3_fixers == ['your.fixers', 'or.here']
+            assert dist.use_2to3_exclude_fixers == ['one.here', 'two.there']
+            assert dist.convert_2to3_doctests == ([
+                'src/tests/one.txt', 'src/two.txt'])
             assert dist.scripts == ['bin/one.py', 'bin/two.py']
             assert dist.dependency_links == (
                 ['http://some.com/here/1', 'http://some.com/there/2']
@@ -549,6 +558,15 @@ class TestOptions:
             'namespace_packages = \n'
             '  pack1\n'
             '  pack2\n'
+            'use_2to3_fixers = \n'
+            '  your.fixers\n'
+            '  or.here\n'
+            'use_2to3_exclude_fixers = \n'
+            '  one.here\n'
+            '  two.there\n'
+            'convert_2to3_doctests = \n'
+            '  src/tests/one.txt\n'
+            '  src/two.txt\n'
             'scripts = \n'
             '  bin/one.py\n'
             '  bin/two.py\n'
@@ -574,6 +592,10 @@ class TestOptions:
             assert dist.package_dir == {'': 'src', 'b': 'c'}
             assert dist.packages == ['pack_a', 'pack_b.subpack']
             assert dist.namespace_packages == ['pack1', 'pack2']
+            assert dist.use_2to3_fixers == ['your.fixers', 'or.here']
+            assert dist.use_2to3_exclude_fixers == ['one.here', 'two.there']
+            assert dist.convert_2to3_doctests == (
+                ['src/tests/one.txt', 'src/two.txt'])
             assert dist.scripts == ['bin/one.py', 'bin/two.py']
             assert dist.dependency_links == (
                 ['http://some.com/here/1', 'http://some.com/there/2']

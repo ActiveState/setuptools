@@ -3,6 +3,7 @@ from jaraco import path
 
 from setuptools.command.test import test
 from setuptools.dist import Distribution
+from setuptools.tests import ack_2to3
 
 from .textwrap import DALS
 

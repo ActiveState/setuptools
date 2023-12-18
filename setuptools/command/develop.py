@@ -107,11 +107,36 @@ class develop(namespaces.DevelopInstaller, easy_install):
         return path_to_setup
 
     def install_for_development(self):
-        self.run_command('egg_info')
+        if getattr(self.distribution, 'use_2to3', False):
+            # If we run 2to3 we can not do this inplace:
 
-        # Build extensions in-place
-        self.reinitialize_command('build_ext', inplace=1)
-        self.run_command('build_ext')
+            # Ensure metadata is up-to-date
+            self.reinitialize_command('build_py', inplace=0)
+            self.run_command('build_py')
+            bpy_cmd = self.get_finalized_command("build_py")
+            build_path = pkg_resources.normalize_path(bpy_cmd.build_lib)
+
+            # Build extensions
+            self.reinitialize_command('egg_info', egg_base=build_path)
+            self.run_command('egg_info')
+
+            self.reinitialize_command('build_ext', inplace=0)
+            self.run_command('build_ext')
+
+            # Fixup egg-link and easy-install.pth
+            ei_cmd = self.get_finalized_command("egg_info")
+            self.egg_path = build_path
+            self.dist.location = build_path
+            # XXX
+            self.dist._provider = pkg_resources.PathMetadata(
+                build_path, ei_cmd.egg_info)
+        else:
+            # Without 2to3 inplace works fine:
+            self.run_command('egg_info')
+
+            # Build extensions in-place
+            self.reinitialize_command('build_ext', inplace=1)
+            self.run_command('build_ext')
 
         if setuptools.bootstrap_install_from:
             self.easy_install(setuptools.bootstrap_install_from)

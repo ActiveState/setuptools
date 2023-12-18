@@ -10,12 +10,20 @@ import itertools
 import stat
 from setuptools.extern.more_itertools import unique_everseen
 
+try:
+    from setuptools.lib2to3_ex import Mixin2to3
+except Exception:
+
+    class Mixin2to3:
+        def run_2to3(self, files, doctests=True):
+            "do nothing"
+
 
 def make_writable(target):
     os.chmod(target, os.stat(target).st_mode | stat.S_IWRITE)
 
 
-class build_py(orig.build_py):
+class build_py(orig.build_py, Mixin2to3):
     """Enhanced 'build_py' command that includes data files with packages
 
     The data files are specified via a 'package_data' argument to 'setup()'.
@@ -32,6 +40,7 @@ class build_py(orig.build_py):
         if 'data_files' in self.__dict__:
             del self.__dict__['data_files']
         self.__updated_files = []
+        self.__doctests_2to3 = []
 
     def run(self):
         """Build modules, packages, and copy data files to build directory"""
@@ -44,6 +53,10 @@ class build_py(orig.build_py):
         if self.packages:
             self.build_packages()
             self.build_package_data()
+
+        self.run_2to3(self.__updated_files, False)
+        self.run_2to3(self.__updated_files, True)
+        self.run_2to3(self.__doctests_2to3, True)
 
         # Only compile actual .py files, using our base class' idea of what our
         # output files are.
@@ -118,6 +131,9 @@ class build_py(orig.build_py):
                 outf, copied = self.copy_file(srcfile, target)
                 make_writable(target)
                 srcfile = os.path.abspath(srcfile)
+                if (copied and
+                        srcfile in self.distribution.convert_2to3_doctests):
+                    self.__doctests_2to3.append(outf)
 
     def analyze_manifest(self):
         self.manifest_files = mf = {}

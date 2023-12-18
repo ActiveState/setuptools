@@ -625,8 +625,12 @@ class ConfigOptionsHandler(ConfigHandler):
 
         return {
             'zip_safe': parse_bool,
+            'use_2to3': parse_bool,
             'include_package_data': parse_bool,
             'package_dir': parse_dict,
+            'use_2to3_fixers': parse_list,
+            'use_2to3_exclude_fixers': parse_list,
+            'convert_2to3_doctests': parse_list,
             'scripts': parse_list,
             'eager_resources': parse_list,
             'dependency_links': parse_list,

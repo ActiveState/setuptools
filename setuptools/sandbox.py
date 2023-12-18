@@ -426,7 +426,11 @@ class DirectorySandbox(AbstractSandbox):
         ]
     )
 
-    _exception_patterns = []
+    _exception_patterns = [
+        # Allow lib2to3 to attempt to save a pickled grammar object (#121)
+        r'.*lib2to3.*\.pickle$',
+    ]
+
     "exempt writing to paths that match the pattern"
 
     def __init__(self, sandbox, exceptions=_EXCEPTIONS):

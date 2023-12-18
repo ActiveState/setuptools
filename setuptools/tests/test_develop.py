@@ -14,6 +14,7 @@ import pytest
 
 from setuptools.command.develop import develop
 from setuptools.dist import Distribution
+from setuptools.tests import ack_2to3
 from . import contexts
 from . import namespaces
 
@@ -22,6 +23,7 @@ from setuptools import setup
 
 setup(name='foo',
     packages=['foo'],
+    use_2to3=True,
 )
 """
 
@@ -57,6 +59,43 @@ def test_env(tmpdir, temp_user):
 class TestDevelop:
     in_virtualenv = hasattr(sys, 'real_prefix')
     in_venv = hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix
+
+    @pytest.mark.skipif(
+        in_virtualenv or in_venv,
+        reason="Cannot run when invoked in a virtualenv or venv")
+    @ack_2to3
+    def test_2to3_user_mode(self, test_env):
+        settings = dict(
+            name='foo',
+            packages=['foo'],
+            use_2to3=True,
+            version='0.0',
+        )
+        dist = Distribution(settings)
+        dist.script_name = 'setup.py'
+        cmd = develop(dist)
+        cmd.user = 1
+        cmd.ensure_finalized()
+        cmd.install_dir = site.USER_SITE
+        cmd.user = 1
+        with contexts.quiet():
+            cmd.run()
+
+        # let's see if we got our egg link at the right place
+        content = os.listdir(site.USER_SITE)
+        content.sort()
+        assert content == ['easy-install.pth', 'foo.egg-link']
+
+        # Check that we are using the right code.
+        fn = os.path.join(site.USER_SITE, 'foo.egg-link')
+        with io.open(fn) as egg_link_file:
+            path = egg_link_file.read().split()[0].strip()
+        fn = os.path.join(path, 'foo', '__init__.py')
+        with io.open(fn) as init_file:
+            init = init_file.read().strip()
+
+        expected = 'print("foo")'
+        assert init == expected
 
     def test_console_scripts(self, tmpdir):
         """

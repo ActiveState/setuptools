@@ -35,6 +35,12 @@ __version__ = setuptools.version.__version__
 
 bootstrap_install_from = None
 
+# If we run 2to3 on .py files, should we also convert docstrings?
+# Default: yes; assume that we can detect doctests reliably
+run_2to3_on_doctests = True
+# Standard package names for fixer packages
+lib2to3_fixer_packages = ['lib2to3.fixes']
+
 
 class PackageFinder:
     """

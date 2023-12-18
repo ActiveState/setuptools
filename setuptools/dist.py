@@ -844,10 +844,7 @@ class Distribution(_Distribution):
         entry point will attempt to be loaded and will fail.
         See #2765 for more details.
         """
-        removed = {
-            # removed 2021-09-05
-            '2to3_doctests',
-        }
+        removed = {}
         return ep.name in removed
 
     def _finalize_setup_keywords(self):
@@ -856,6 +853,16 @@ class Distribution(_Distribution):
             if value is not None:
                 ep.require(installer=self.fetch_build_egg)
                 ep.load()(self, ep.name, value)
+
+    def _finalize_2to3_doctests(self):
+        if getattr(self, 'convert_2to3_doctests', None):
+            # XXX may convert to set here when we can rely on set being builtin
+            self.convert_2to3_doctests = [
+                os.path.abspath(p)
+                for p in self.convert_2to3_doctests
+            ]
+        else:
+            self.convert_2to3_doctests = []
 
     def get_egg_cache_dir(self):
         egg_cache_dir = os.path.join(os.curdir, '.eggs')

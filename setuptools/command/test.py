@@ -133,11 +133,30 @@ class test(Command):
 
     @contextlib.contextmanager
     def project_on_sys_path(self, include_dists=[]):
-        self.run_command('egg_info')
+        with_2to3 = getattr(self.distribution, 'use_2to3', False)
 
-        # Build extensions in-place
-        self.reinitialize_command('build_ext', inplace=1)
-        self.run_command('build_ext')
+        if with_2to3:
+            # If we run 2to3 we can not do this inplace:
+
+            # Ensure metadata is up-to-date
+            self.reinitialize_command('build_py', inplace=0)
+            self.run_command('build_py')
+            bpy_cmd = self.get_finalized_command("build_py")
+            build_path = normalize_path(bpy_cmd.build_lib)
+
+            # Build extensions
+            self.reinitialize_command('egg_info', egg_base=build_path)
+            self.run_command('egg_info')
+
+            self.reinitialize_command('build_ext', inplace=0)
+            self.run_command('build_ext')
+        else:
+            # Without 2to3 inplace works fine:
+            self.run_command('egg_info')
+
+            # Build extensions in-place
+            self.reinitialize_command('build_ext', inplace=1)
+            self.run_command('build_ext')
 
         ei_cmd = self.get_finalized_command("egg_info")
 
@@ -223,6 +242,21 @@ class test(Command):
                 self.run_tests()
 
     def run_tests(self):
+        # Purge modules under test from sys.modules. The test loader will
+        # re-import them from the build location. Required when 2to3 is used
+        # with namespace packages.
+        if getattr(self.distribution, 'use_2to3', False):
+            module = self.test_suite.split('.')[0]
+            if module in _namespace_packages:
+                del_modules = []
+                if module in sys.modules:
+                    del_modules.append(module)
+                module += '.'
+                for name in sys.modules:
+                    if name.startswith(module):
+                        del_modules.append(name)
+                list(map(sys.modules.__delitem__, del_modules))
+
         test = unittest.main(
             None,
             None,
