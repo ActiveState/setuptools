@@ -298,9 +298,17 @@ class Compiler(base.Compiler):
             )
         self._configure(vc_env)
 
+        # Allow CC variable to invoke Clang
+        msvc_compiler = os.environ.get("CC","cl.exe")
+        clang_names = ["clang", "clang-cl", "clang-cl.exe"]
+        if msvc_compiler in clang_names:
+            msvc_compiler = "clang-cl.exe"
+        else:
+            msvc_compiler = "cl.exe"
+
         self._paths = vc_env.get('path', '')
         paths = self._paths.split(os.pathsep)
-        self.cc = _find_exe("cl.exe", paths)
+        self.cc = _find_exe(msvc_compiler, paths)
         self.linker = _find_exe("link.exe", paths)
         self.lib = _find_exe("lib.exe", paths)
         self.rc = _find_exe("rc.exe", paths)  # resource compiler
