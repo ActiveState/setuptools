@@ -300,8 +300,10 @@ class Compiler(base.Compiler):
 
         # Allow CC variable to invoke Clang
         msvc_compiler = os.environ.get("CC","cl.exe")
+        use_clang_cl = False
         clang_names = ["clang", "clang-cl", "clang-cl.exe"]
         if msvc_compiler in clang_names:
+            use_clang_cl = True
             msvc_compiler = "clang-cl.exe"
         else:
             msvc_compiler = "cl.exe"
@@ -333,6 +335,24 @@ class Compiler(base.Compiler):
         ldflags = ['/nologo', '/INCREMENTAL:NO', '/LTCG']
 
         ldflags_debug = ['/nologo', '/INCREMENTAL:NO', '/LTCG', '/DEBUG:FULL']
+
+        PLAT_TO_LLVM_TARGETS = {
+            'win32': 'i686-pc-windows-msvc',
+            'win-amd64': 'x86_64-pc-windows-msvc',
+            'win-arm32': 'arm-pc-windows-msvc',
+            'win-arm64': 'aarch64-pc-windows-msvc',
+        }
+
+        if use_clang_cl:
+            # Add target for clang
+            target_flag = "--target=" + PLAT_TO_LLVM_TARGETS[plat_name]
+            self.compile_options.append(target_flag)
+            self.compile_options_debug.append(target_flag)
+            # Remove whole program optimization flags to avoid warnings about
+            # unrecognized options
+            self.compile_options.remove('/GL')
+            ldflags.remove('/LTCG')
+            ldflags_debug.remove('/LTCG')
 
         self.ldflags_exe = [*ldflags, '/MANIFEST:EMBED,ID=1']
         self.ldflags_exe_debug = [*ldflags_debug, '/MANIFEST:EMBED,ID=1']
