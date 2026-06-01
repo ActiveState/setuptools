@@ -1,5 +1,16 @@
+v44.1.1+security.2
+------------------
+
+* Fixed a remote code execution vulnerability in ``package_index``: VCS
+  download URLs were passed to ``os.system``, allowing shell command
+  injection. VCS clients are now invoked via ``subprocess`` with an argument
+  list and no shell (CVE-2024-6345).
+* Fixed a path traversal vulnerability in ``package_index``: a crafted
+  download URL could escape the target directory. Download filenames are now
+  sanitized so they cannot traverse outside of it (CVE-2025-47273).
+
 v44.1.1.1
--------
+---------
 
 * #3659: Limit the amount of whitespace to search/backtrack (CVE-2022-40897)
 
