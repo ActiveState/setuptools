@@ -275,6 +275,24 @@ class TestPackageIndex:
         with pytest.raises(distutils.errors.DistutilsError, match=msg):
             index.download(url, str(tmpdir))
 
+    def test_download_filename_path_traversal(self, tmpdir):
+        """
+        A malicious URL must not be able to write outside of tmpdir via
+        path traversal (CVE-2025-47273).
+        """
+        index = setuptools.package_index.PackageIndex()
+        # URL-encoded '../../../../etc/passwd'
+        url = (
+            'https://example.com/'
+            '%2e%2e%2f%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd'
+        )
+        result = index._resolve_download_filename(url, str(tmpdir))
+
+        # the resolved file stays directly inside tmpdir
+        assert os.path.dirname(result) == str(tmpdir)
+        realtmp = os.path.realpath(str(tmpdir))
+        assert os.path.realpath(result).startswith(realtmp + os.sep)
+
 
 class TestContentCheckers:
     def test_md5(self):

@@ -796,20 +796,60 @@ class PackageIndex(Environment):
                 raise DistutilsError("Download error for %s: %s"
                                      % (url, v))
 
+    @staticmethod
+    def _sanitize(name):
+        r"""
+        Replace unsafe path directives with underscores.
+
+        >>> san = PackageIndex._sanitize
+        >>> san('/home/user/.ssh/authorized_keys')
+        '_home_user_.ssh_authorized_keys'
+        >>> san('..\\foo\\bing')
+        '__foo_bing'
+        >>> san('D:bar')
+        'D_bar'
+        >>> san('C:\\bar')
+        'C__bar'
+        >>> san('foo..bar')
+        'foo..bar'
+        >>> san('D:../foo')
+        'D___foo'
+        """
+        pattern = '|'.join((
+            # drive letters
+            r':',
+            # path separators
+            r'[/\\]',
+            # parent dirs
+            r'(?:(?<=([/\\]|:))\.\.(?=[/\\]|$))|(?:^\.\.(?=[/\\]|$))',
+        ))
+        return re.sub(pattern, r'_', name)
+
+    @classmethod
+    def _resolve_download_filename(cls, url, tmpdir):
+        """
+        Resolve the local download filename for ``url`` within ``tmpdir``.
+
+        The filename is derived from the URL but sanitized so that it can
+        never escape ``tmpdir`` via absolute paths, drive letters or parent
+        directory references (CVE-2025-47273).
+        """
+        name, _fragment = egg_info_for_url(url)
+        name = cls._sanitize(
+            name
+            or
+            # default if URL has no path contents
+            '__downloaded__'
+        )
+
+        # strip any extra .zip before download
+        name = re.sub(r'\.egg\.zip$', '.egg', name)
+
+        return os.path.join(tmpdir, name)
+
     def _download_url(self, url, tmpdir):
-        # Determine download filename
-        #
-        name, fragment = egg_info_for_url(url)
-        if name:
-            while '..' in name:
-                name = name.replace('..', '.').replace('\\', '_')
-        else:
-            name = "__downloaded__"  # default if URL has no path contents
-
-        if name.endswith('.egg.zip'):
-            name = name[:-4]  # strip the extra .zip before download
-
-        filename = os.path.join(tmpdir, name)
+        # Determine the download filename, guarding against path traversal.
+        filename = self._resolve_download_filename(url, tmpdir)
 
         # Download the file
         #
