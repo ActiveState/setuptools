@@ -4,10 +4,10 @@ import os
 import re
 import shutil
 import socket
+import subprocess
 import base64
 import hashlib
 import itertools
-import warnings
 from functools import wraps
 
 from setuptools.extern import six
@@ -578,7 +578,7 @@ class PackageIndex(Environment):
             scheme = URL_SCHEME(spec)
             if scheme:
                 # It's a url, download it to tmpdir
-                found = self._download_url(scheme.group(1), spec, tmpdir)
+                found = self._download_url(spec, tmpdir)
                 base, fragment = egg_info_for_url(spec)
                 if base.endswith('.py'):
                     found = self.gen_setup(found, fragment, tmpdir)
@@ -796,7 +796,7 @@ class PackageIndex(Environment):
                 raise DistutilsError("Download error for %s: %s"
                                      % (url, v))
 
-    def _download_url(self, scheme, url, tmpdir):
+    def _download_url(self, url, tmpdir):
         # Determine download filename
         #
         name, fragment = egg_info_for_url(url)
@@ -813,17 +813,59 @@ class PackageIndex(Environment):
 
         # Download the file
         #
-        if scheme == 'svn' or scheme.startswith('svn+'):
-            return self._download_svn(url, filename)
-        elif scheme == 'git' or scheme.startswith('git+'):
-            return self._download_git(url, filename)
-        elif scheme.startswith('hg+'):
-            return self._download_hg(url, filename)
-        elif scheme == 'file':
-            return urllib.request.url2pathname(urllib.parse.urlparse(url)[2])
-        else:
-            self.url_ok(url, True)  # raises error if not allowed
-            return self._attempt_download(url, filename)
+        return self._download_vcs(url, filename) or self._download_other(url, filename)
+
+    @staticmethod
+    def _resolve_vcs(url):
+        """
+        >>> rvcs = PackageIndex._resolve_vcs
+        >>> rvcs('git+http://foo/bar')
+        'git'
+        >>> rvcs('hg+https://foo/bar')
+        'hg'
+        >>> rvcs('git:myhost')
+        'git'
+        >>> rvcs('hg:myhost')
+        >>> rvcs('http://foo/bar')
+        """
+        scheme = urllib.parse.urlsplit(url).scheme
+        pre, sep, post = scheme.partition('+')
+        # svn and git have their own protocol; hg does not
+        allowed = set(['svn', 'git'] + ['hg'] * bool(sep))
+        return next(iter(set([pre]) & allowed), None)
+
+    def _download_vcs(self, url, spec_filename):
+        vcs = self._resolve_vcs(url)
+        if not vcs:
+            return
+        if vcs == 'svn':
+            raise DistutilsError(
+                "Invalid config, SVN download is not supported: %s" % url
+            )
+
+        filename, _, _ = spec_filename.partition('#')
+        url, rev = self._vcs_split_rev_from_url(url)
+
+        self.info("Doing %s clone from %s to %s" % (vcs, url, filename))
+        subprocess.check_call([vcs, 'clone', '--quiet', url, filename])
+
+        co_commands = dict(
+            git=[vcs, '-C', filename, 'checkout', '--quiet', rev],
+            hg=[vcs, '--cwd', filename, 'up', '-C', '-r', rev, '-q'],
+        )
+        if rev is not None:
+            self.info("Checking out %s" % rev)
+            subprocess.check_call(co_commands[vcs])
+
+        return filename
+
+    def _download_other(self, url, filename):
+        scheme = urllib.parse.urlsplit(url).scheme
+        if scheme == 'file':
+            return urllib.request.url2pathname(urllib.parse.urlparse(url).path)
+        # raise error if not allowed
+        self.url_ok(url, True)
+        return self._attempt_download(url, filename)
 
     def scan_url(self, url):
         self.process_url(url, True)
@@ -831,46 +873,13 @@ class PackageIndex(Environment):
     def _attempt_download(self, url, filename):
         headers = self._download_to(url, filename)
         if 'html' in headers.get('content-type', '').lower():
-            return self._download_html(url, headers, filename)
+            return self._invalid_download_html(url, headers, filename)
         else:
             return filename
 
-    def _download_html(self, url, headers, filename):
-        file = open(filename)
-        for line in file:
-            if line.strip():
-                # Check for a subversion index page
-                if re.search(r'<title>([^- ]+ - )?Revision \d+:', line):
-                    # it's a subversion index page:
-                    file.close()
-                    os.unlink(filename)
-                    return self._download_svn(url, filename)
-                break  # not an index page
-        file.close()
+    def _invalid_download_html(self, url, headers, filename):
         os.unlink(filename)
         raise DistutilsError("Unexpected HTML page found at " + url)
-
-    def _download_svn(self, url, filename):
-        warnings.warn("SVN download support is deprecated", UserWarning)
-        url = url.split('#', 1)[0]  # remove any fragment for svn's sake
-        creds = ''
-        if url.lower().startswith('svn:') and '@' in url:
-            scheme, netloc, path, p, q, f = urllib.parse.urlparse(url)
-            if not netloc and path.startswith('//') and '/' in path[2:]:
-                netloc, path = path[2:].split('/', 1)
-                auth, host = _splituser(netloc)
-                if auth:
-                    if ':' in auth:
-                        user, pw = auth.split(':', 1)
-                        creds = " --username=%s --password=%s" % (user, pw)
-                    else:
-                        creds = " --username=" + auth
-                    netloc = host
-                    parts = scheme, netloc, url, p, q, f
-                    url = urllib.parse.urlunparse(parts)
-        self.info("Doing subversion checkout from %s to %s", url, filename)
-        os.system("svn checkout%s -q %s %s" % (creds, url, filename))
-        return filename
 
     @staticmethod
     def _vcs_split_rev_from_url(url, pop_prefix=False):
@@ -889,38 +898,6 @@ class PackageIndex(Environment):
         url = urllib.parse.urlunsplit((scheme, netloc, path, query, ''))
 
         return url, rev
-
-    def _download_git(self, url, filename):
-        filename = filename.split('#', 1)[0]
-        url, rev = self._vcs_split_rev_from_url(url, pop_prefix=True)
-
-        self.info("Doing git clone from %s to %s", url, filename)
-        os.system("git clone --quiet %s %s" % (url, filename))
-
-        if rev is not None:
-            self.info("Checking out %s", rev)
-            os.system("git -C %s checkout --quiet %s" % (
-                filename,
-                rev,
-            ))
-
-        return filename
-
-    def _download_hg(self, url, filename):
-        filename = filename.split('#', 1)[0]
-        url, rev = self._vcs_split_rev_from_url(url, pop_prefix=True)
-
-        self.info("Doing hg clone from %s to %s", url, filename)
-        os.system("hg clone --quiet %s %s" % (url, filename))
-
-        if rev is not None:
-            self.info("Updating to %s", rev)
-            os.system("hg --cwd %s up -C -r %s -q" % (
-                filename,
-                rev,
-            ))
-
-        return filename
 
     def debug(self, msg, *args):
         log.debug(msg, *args)

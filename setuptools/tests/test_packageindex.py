@@ -236,56 +236,44 @@ class TestPackageIndex:
         url = 'git+https://github.example/group/project@master#egg=foo'
         index = setuptools.package_index.PackageIndex()
 
-        with mock.patch("os.system") as os_system_mock:
+        with mock.patch("setuptools.package_index.subprocess.check_call") \
+                as check_call:
             result = index.download(url, str(tmpdir))
 
-        os_system_mock.assert_called()
-
         expected_dir = str(tmpdir / 'project@master')
-        expected = (
-            'git clone --quiet '
-            'https://github.example/group/project {expected_dir}'
-        ).format(**locals())
-        first_call_args = os_system_mock.call_args_list[0][0]
-        assert first_call_args == (expected,)
-
-        tmpl = 'git -C {expected_dir} checkout --quiet master'
-        expected = tmpl.format(**locals())
-        assert os_system_mock.call_args_list[1][0] == (expected,)
         assert result == expected_dir
+
+        assert check_call.call_count == 2
+        assert check_call.call_args_list[0][0][0] == [
+            'git', 'clone', '--quiet',
+            'https://github.example/group/project', expected_dir,
+        ]
+        assert check_call.call_args_list[1][0][0] == [
+            'git', '-C', expected_dir, 'checkout', '--quiet', 'master',
+        ]
 
     def test_download_git_no_rev(self, tmpdir):
         url = 'git+https://github.example/group/project#egg=foo'
         index = setuptools.package_index.PackageIndex()
 
-        with mock.patch("os.system") as os_system_mock:
+        with mock.patch("setuptools.package_index.subprocess.check_call") \
+                as check_call:
             result = index.download(url, str(tmpdir))
 
-        os_system_mock.assert_called()
-
         expected_dir = str(tmpdir / 'project')
-        expected = (
-            'git clone --quiet '
-            'https://github.example/group/project {expected_dir}'
-        ).format(**locals())
-        os_system_mock.assert_called_once_with(expected)
+        assert result == expected_dir
+        check_call.assert_called_once_with([
+            'git', 'clone', '--quiet',
+            'https://github.example/group/project', expected_dir,
+        ])
 
     def test_download_svn(self, tmpdir):
         url = 'svn+https://svn.example/project#egg=foo'
         index = setuptools.package_index.PackageIndex()
 
-        with pytest.warns(UserWarning):
-            with mock.patch("os.system") as os_system_mock:
-                result = index.download(url, str(tmpdir))
-
-        os_system_mock.assert_called()
-
-        expected_dir = str(tmpdir / 'project')
-        expected = (
-            'svn checkout -q '
-            'svn+https://svn.example/project {expected_dir}'
-        ).format(**locals())
-        os_system_mock.assert_called_once_with(expected)
+        msg = r".*SVN download is not supported.*"
+        with pytest.raises(distutils.errors.DistutilsError, match=msg):
+            index.download(url, str(tmpdir))
 
 
 class TestContentCheckers:
