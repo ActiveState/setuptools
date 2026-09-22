@@ -17,9 +17,9 @@ index 277b664..2b4e88c 100755
  
  here = os.path.dirname(__file__)
  
-+# THR CS-2493: the sdist ships without setuptools.egg-info, and setuptools'
-+# own bootstrap.py (which would normally create it) is a separate script
-+# bazelbub's build has no hook to run before setup.py. This inlines
++# The sdist ships without setuptools.egg-info, and setuptools' own
++# bootstrap.py (which would normally create it) is a separate script this
++# build has no hook to run before setup.py. This inlines
 +# bootstrap.py's own ensure_egg_info()/build_egg_info() logic verbatim --
 +# same upstream-official minimal stub (including its unicode_literals need,
 +# since io.open(..., 'w') requires text under Python 2) -- just triggered
