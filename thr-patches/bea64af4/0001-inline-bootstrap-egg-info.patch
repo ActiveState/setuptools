@@ -1,0 +1,58 @@
+diff --git a/setup.py b/setup.py
+index 277b664..2b4e88c 100755
+--- a/setup.py
++++ b/setup.py
+@@ -3,23 +3,48 @@
+ Distutils setup file, used to install or test 'setuptools'
+ """
+ 
++from __future__ import unicode_literals
++
++import io
+ import os
+ import sys
++import textwrap
+ 
+ import setuptools
+ 
+ here = os.path.dirname(__file__)
+ 
++# THR CS-2493: the sdist ships without setuptools.egg-info, and setuptools'
++# own bootstrap.py (which would normally create it) is a separate script
++# bazelbub's build has no hook to run before setup.py. This inlines
++# bootstrap.py's own ensure_egg_info()/build_egg_info() logic verbatim --
++# same upstream-official minimal stub (including its unicode_literals need,
++# since io.open(..., 'w') requires text under Python 2) -- just triggered
++# automatically here instead of requiring a prior `python bootstrap.py` run.
++_MINIMAL_EGG_INFO = textwrap.dedent("""
++    [distutils.commands]
++    egg_info = setuptools.command.egg_info:egg_info
++
++    [distutils.setup_keywords]
++    include_package_data = setuptools.dist:assert_bool
++    install_requires = setuptools.dist:check_requirements
++    extras_require = setuptools.dist:check_extras
++    entry_points = setuptools.dist:check_entry_points
++
++    [egg_info.writers]
++    dependency_links.txt = setuptools.command.egg_info:overwrite_arg
++    entry_points.txt = setuptools.command.egg_info:write_entries
++    requires.txt = setuptools.command.egg_info:write_requirements
++    """)
++
+ 
+ def require_metadata():
+     "Prevent improper installs without necessary metadata. See #659"
+     egg_info_dir = os.path.join(here, 'setuptools.egg-info')
+     if not os.path.exists(egg_info_dir):
+-        msg = (
+-            "Cannot build setuptools without metadata. "
+-            "Run `bootstrap.py`."
+-        )
+-        raise RuntimeError(msg)
++        os.mkdir(egg_info_dir)
++        with io.open(os.path.join(egg_info_dir, 'entry_points.txt'), 'w') as ep:
++            ep.write(_MINIMAL_EGG_INFO)
+ 
+ 
+ def read_commands():
