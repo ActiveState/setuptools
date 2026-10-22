@@ -1,3 +1,14 @@
+v44.1.1.post3
+-------------
+
+* Fixed ``MANIFEST.in`` matching being sensitive to Unicode normalization
+  form. A pattern authored NFC (as editors usually save it) did not match a
+  file whose name is stored NFD (as on macOS APFS/HFS+), so an ``exclude``,
+  ``global-exclude``, ``recursive-exclude`` or ``prune`` rule could silently
+  fail to drop a non-ASCII-named file from the sdist. Patterns and candidate
+  paths are now both normalized to NFC before matching (CVE-2026-59890,
+  GHSA-h35f-9h28-mq5c).
+
 v44.1.1+security.2
 ------------------
 
