@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import itertools
+import unicodedata
 from distutils import log
 from distutils.errors import DistutilsTemplateError
 
@@ -157,6 +158,32 @@ def test_translated_pattern_match(pattern_match):
 def test_translated_pattern_mismatch(pattern_mismatch):
     pattern, target = pattern_mismatch
     assert not translate_pattern(pattern).match(target)
+
+
+NFC_NAME = unicodedata.normalize('NFC', u'café.txt')
+NFD_NAME = unicodedata.normalize('NFD', u'café.txt')
+
+
+@pytest.mark.parametrize('encode', [False, True], ids=['text', 'bytes'])
+def test_translate_pattern_unicode_normalization(encode):
+    """
+    Matching is insensitive to Unicode normalization form: a pattern authored
+    in one form matches a path stored on disk in another (and vice versa), so
+    that an exclusion cannot be bypassed by an NFC/NFD mismatch. The bytes
+    case covers Python 2, where MANIFEST.in lines and walked file names are
+    native byte strings.
+
+    Regression test for CVE-2026-59890 (GHSA-h35f-9h28-mq5c).
+    """
+    if encode and six.PY3:
+        pytest.skip('byte-string patterns are only used on Python 2')
+    nfc, nfd = NFC_NAME, NFD_NAME
+    if encode:
+        nfc, nfd = nfc.encode('utf-8'), nfd.encode('utf-8')
+    assert nfc != nfd  # the two forms genuinely differ
+    assert translate_pattern(nfc).match(nfd)
+    assert translate_pattern(nfd).match(nfc)
+    assert translate_pattern(nfc).search(nfd)
 
 
 class TempDirTestCase:
@@ -316,6 +343,31 @@ class TestManifestTest(TempDirTestCase):
         files = default_files | set([
             ml('app/a.txt'), ml('app/b.txt'), ml('app/c.rst')])
         assert files == self.get_files()
+
+    def test_global_exclude_unicode_normalization(self):
+        """
+        A ``global-exclude`` authored NFC must drop a file whose on-disk name
+        is NFD: on macOS APFS/HFS+ the two are the same file, and even on
+        normalization-exact filesystems the decomposed name can be committed
+        and reach the build. Otherwise the file is published in the sdist
+        despite the exclusion.
+
+        Regression test for CVE-2026-59890 (GHSA-h35f-9h28-mq5c).
+        """
+        nfd_path = os.path.join(self.temp_dir, 'app', NFD_NAME)
+        if six.PY2:
+            nfd_path = nfd_path.encode('utf-8')
+        # write the file under its decomposed (NFD) name ...
+        touch(nfd_path)
+        # ... and exclude it with the composed (NFC) form.
+        manifest = u'global-include *.txt\nglobal-exclude %s\n' % NFC_NAME
+        with open(os.path.join(self.temp_dir, 'MANIFEST.in'), 'wb') as f:
+            f.write(manifest.encode('utf-8'))
+        leaked = set(
+            f for f in self.get_files()
+            if os.path.basename(f).startswith('caf')
+        )
+        assert not leaked, 'excluded file leaked into manifest: %r' % leaked
 
 
 class TestFileListTest(TempDirTestCase):

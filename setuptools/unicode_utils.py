@@ -17,6 +17,31 @@ def decompose(path):
     return path
 
 
+def normalize(path):
+    """
+    Return *path* in a canonical Unicode form (NFC) so that names which are
+    visually identical but encoded differently compare equal.
+
+    macOS APFS/HFS+ store file names in decomposed form (NFD), while patterns
+    in ``MANIFEST.in`` are typically authored composed (NFC). The two denote
+    the same file but differ byte-for-byte, so matching them directly lets an
+    exclusion silently fail. Normalizing both the walked path and the pattern
+    to a single form before matching avoids that (CVE-2026-59890).
+
+    Byte strings (the native ``str`` on Python 2) are normalized as UTF-8 and
+    returned as bytes; anything that is not valid UTF-8 is returned unchanged.
+    """
+    if isinstance(path, six.text_type):
+        return unicodedata.normalize('NFC', path)
+    try:
+        path = path.decode('utf-8')
+        path = unicodedata.normalize('NFC', path)
+        path = path.encode('utf-8')
+    except UnicodeError:
+        pass  # Not UTF-8
+    return path
+
+
 def filesys_decode(path):
     """
     Ensure that the given path is decoded,
