@@ -33,6 +33,7 @@ from setuptools.glob import glob
 from setuptools.extern import packaging
 from setuptools import SetuptoolsDeprecationWarning
 
+
 class _NormalizedMatcher(object):
     """
     Wrap a compiled pattern so that matching is insensitive to Unicode
@@ -47,11 +48,30 @@ class _NormalizedMatcher(object):
     def __init__(self, pattern):
         self._pattern = pattern
 
+    def _prepare(self, path):
+        path = unicode_utils.normalize(path)
+        # On Python 2 a MANIFEST.in pattern and a FileList entry can be of
+        # different string types (e.g. a file finder returning text paths for
+        # non-ASCII names), and a byte pattern never matches a non-ASCII text
+        # path or vice versa. Bring the path to the pattern's type first.
+        if isinstance(self._pattern.pattern, six.text_type):
+            if isinstance(path, bytes):
+                try:
+                    path = path.decode('utf-8')
+                except UnicodeDecodeError:
+                    pass
+        elif isinstance(path, six.text_type):
+            try:
+                path = path.encode('utf-8')
+            except UnicodeEncodeError:
+                pass
+        return path
+
     def match(self, path):
-        return self._pattern.match(unicode_utils.normalize(path))
+        return self._pattern.match(self._prepare(path))
 
     def search(self, path):
-        return self._pattern.search(unicode_utils.normalize(path))
+        return self._pattern.search(self._prepare(path))
 
 
 def translate_pattern(glob):
