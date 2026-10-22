@@ -33,6 +33,27 @@ from setuptools.glob import glob
 from setuptools.extern import packaging
 from setuptools import SetuptoolsDeprecationWarning
 
+class _NormalizedMatcher(object):
+    """
+    Wrap a compiled pattern so that matching is insensitive to Unicode
+    normalization form.
+
+    File names walked from disk (NFD on macOS APFS/HFS+) and patterns from
+    ``MANIFEST.in`` (typically NFC) can denote the same file while differing
+    byte-for-byte. Normalizing both sides before matching keeps an exclusion
+    (or inclusion) from silently failing. See CVE-2026-59890.
+    """
+
+    def __init__(self, pattern):
+        self._pattern = pattern
+
+    def match(self, path):
+        return self._pattern.match(unicode_utils.normalize(path))
+
+    def search(self, path):
+        return self._pattern.search(unicode_utils.normalize(path))
+
+
 def translate_pattern(glob):
     """
     Translate a file path glob like '*.txt' in to a regular expression.
@@ -41,6 +62,11 @@ def translate_pattern(glob):
     directories.
     """
     pat = ''
+
+    # Normalize the pattern so it matches paths regardless of the Unicode
+    # normalization form used on disk (CVE-2026-59890). Candidate paths
+    # are normalized to the same form by ``_NormalizedMatcher``.
+    glob = unicode_utils.normalize(glob)
 
     # This will split on '/' within [character classes]. This is deliberate.
     chunks = glob.split(os.path.sep)
@@ -113,7 +139,7 @@ def translate_pattern(glob):
             pat += sep
 
     pat += r'\Z'
-    return re.compile(pat, flags=re.MULTILINE|re.DOTALL)
+    return _NormalizedMatcher(re.compile(pat, flags=re.MULTILINE|re.DOTALL))
 
 
 class InfoCommon:
