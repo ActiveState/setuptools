@@ -1,6 +1,11 @@
 v44.1.1.post3
 -------------
 
+* Version ordering: this release uses the ``.postN`` scheme. Under PEP 440
+  it sorts after ``44.1.1+security.2`` but *below* a build labelled
+  ``44.1.1.1`` (the 2023 CVE-2022-40897 release, listed that way in the
+  ActiveState Platform inventory). Do not serve a ``44.1.1.1`` alongside this
+  release: ``setuptools<45`` would resolve to it and miss every fix since.
 * Fixed ``MANIFEST.in`` matching being sensitive to Unicode normalization
   form. A pattern authored NFC (as editors usually save it) did not match a
   file whose name is stored NFD (as on macOS APFS/HFS+), so an ``exclude``,
