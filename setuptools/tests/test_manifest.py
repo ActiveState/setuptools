@@ -160,8 +160,8 @@ def test_translated_pattern_mismatch(pattern_mismatch):
     assert not translate_pattern(pattern).match(target)
 
 
-NFC_NAME = unicodedata.normalize('NFC', u'café.txt')
-NFD_NAME = unicodedata.normalize('NFD', u'café.txt')
+NFC_NAME = unicodedata.normalize('NFC', u'caf\u00e9.txt')
+NFD_NAME = unicodedata.normalize('NFD', u'caf\u00e9.txt')
 
 
 @pytest.mark.parametrize('encode', [False, True], ids=['text', 'bytes'])
@@ -185,6 +185,24 @@ def test_translate_pattern_unicode_normalization(encode):
     assert translate_pattern(nfd).match(nfc)
     assert translate_pattern(nfc).search(nfd)
 
+
+
+@pytest.mark.skipif(six.PY3, reason='mixed str/bytes paths only arise on Python 2')
+@pytest.mark.parametrize('name', [NFC_NAME, NFD_NAME], ids=['nfc', 'nfd'])
+def test_translate_pattern_mixed_string_types(name):
+    """
+    On Python 2 a byte-string pattern must match a text path, and a text
+    pattern a byte-string path, so that an exclusion is not bypassed when
+    MANIFEST.in lines and FileList entries differ in type.
+    """
+    encoded = name.encode('utf-8')
+    assert translate_pattern(NFC_NAME.encode('utf-8')).match(name)
+    assert translate_pattern(NFC_NAME).match(encoded)
+
+    file_list = FileList()
+    file_list.files = [name, u'other.txt']
+    file_list.global_exclude(NFC_NAME.encode('utf-8'))
+    assert file_list.files == [u'other.txt']
 
 class TempDirTestCase:
     def setup_method(self, method):
