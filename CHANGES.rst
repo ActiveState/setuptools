@@ -1,3 +1,26 @@
+v68.0.0.3
+---------
+
+Changes
+^^^^^^^
+* GHSA-h35f-9h28-mq5c: Security Fix for CVE-2026-59890
+  ``MANIFEST.in`` patterns were matched against file names without Unicode
+  normalization. A file stored with a decomposed (NFD) name, as on macOS
+  APFS/HFS+, was not dropped by an ``exclude``/``global-exclude``/
+  ``recursive-exclude``/``prune`` rule written in composed (NFC) form, so it
+  could be published in the sdist despite the rule. Patterns and paths are
+  now both normalized to NFC before matching. Fixed upstream in 83.0.0.
+* GHSA-xmj3-9gf7-h52w: Path escape via ``namespace_packages.txt`` during
+  legacy wheel installation
+  Entries of a wheel's ``namespace_packages.txt`` were joined onto the
+  destination egg directory as paths, so an absolute, drive-qualified or UNC
+  entry placed an ``__init__.py`` outside it. Entries must now be dotted
+  module names that resolve inside the egg directory. Reachable only through
+  the deprecated ``setup_requires`` mechanism. Fixed upstream in 84.1.0.
+
+Misc
+^^^^
+
 v68.0.0.2
 ---------
 
